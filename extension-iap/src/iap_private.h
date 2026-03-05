@@ -24,6 +24,8 @@ struct DM_ALIGNED(16) IAPCommand
     // The actual command payload
     int32_t  	m_Command;
     int32_t  	m_ResponseCode;
+    int32_t  	m_BillingCode;
+    void*     	m_BillingMsg;
     void*    	m_Data;
 };
 

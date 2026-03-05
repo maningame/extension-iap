@@ -589,7 +589,8 @@ public class IapGooglePlay implements PurchasesUpdatedListener {
                 else {
                     Log.e(TAG, "Unable to list products: " + billingResult.getDebugMessage());
                 }
-                productsListener.onProductsResult(billingResultToDefoldResponse(billingResult), a.toString(), commandPtr);
+                productsListener.onProductsResult(billingResultToDefoldResponse(billingResult), a.toString(),
+                    billingResult.getResponseCode(), billingResult.getDebugMessage(), commandPtr);
             }
         });
     }

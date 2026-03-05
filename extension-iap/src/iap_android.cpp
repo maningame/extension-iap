@@ -245,21 +245,30 @@ extern "C" {
 #endif
 
 
-JNIEXPORT void JNICALL Java_com_defold_iap_IapJNI_onProductsResult(JNIEnv* env, jobject, jint responseCode, jstring productList, jlong cmdHandle)
+JNIEXPORT void JNICALL Java_com_defold_iap_IapJNI_onProductsResult(JNIEnv* env, jobject, jint responseCode, jstring productList, jint billingCode, jstring billingMsg, jlong cmdHandle)
 {
     const char* pl = 0;
+    const char* c_billingMsg = env->GetStringUTFChars(billingMsg, 0);
+
     if (productList)
     {
         pl = env->GetStringUTFChars(productList, 0);
     }
 
     IAPCommand* cmd = (IAPCommand*)cmdHandle;
+
     cmd->m_ResponseCode = responseCode;
+    cmd->m_BillingCode = billingCode;
+    cmd->m_BillingMsg = strdup(c_billingMsg);
+
     if (pl)
     {
         cmd->m_Data = strdup(pl);
         env->ReleaseStringUTFChars(productList, pl);
     }
+
+    env->ReleaseStringUTFChars(billingMsg, c_billingMsg);
+
     IAP_Queue_Push(&g_IAP.m_CommandQueue, cmd);
 }
 
@@ -325,7 +334,7 @@ static void HandleProductResult(const IAPCommand* cmd)
     } else {
         dmLogError("IAP error %d", cmd->m_ResponseCode);
         lua_pushnil(L);
-        IAP_PushError(L, "failed to fetch product", BillingResponseToErrorReason((BillingResponse)cmd->m_ResponseCode));
+        IAP_PushError(L, (const char*)cmd->m_BillingMsg, cmd->m_BillingCode);
     }
 
     dmScript::PCall(L, 3, 0);

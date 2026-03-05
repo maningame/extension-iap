@@ -98,7 +98,7 @@ public class IapAmazon implements PurchasingListener {
         }
         PurchasingService.notifyFulfillment(receipt, FulfillmentResult.FULFILLED);
     }
-    
+
     public void acknowledgeTransaction(final String purchaseToken, final IPurchaseListener purchaseListener) {
         // Stub to prevent errors.
     }
@@ -172,7 +172,7 @@ public class IapAmazon implements PurchasingListener {
         }
 
         if (productDataResponse.getRequestStatus() != ProductDataResponse.RequestStatus.SUCCESSFUL) {
-            listener.onProductsResult(IapJNI.BILLING_RESPONSE_RESULT_ERROR, null, commadPtr);
+            listener.onProductsResult(IapJNI.BILLING_RESPONSE_RESULT_ERROR, null, 0, "", commadPtr);
         } else {
             for (final String s : productDataResponse.getUnavailableSkus()) {
                 Log.v(TAG, "Unavailable SKU: " + s);
@@ -196,9 +196,9 @@ public class IapAmazon implements PurchasingListener {
                     }
                     data.put(item);
                 }
-                listener.onProductsResult(IapJNI.BILLING_RESPONSE_RESULT_OK, data.toString(), commadPtr);
+                listener.onProductsResult(IapJNI.BILLING_RESPONSE_RESULT_OK, data.toString(), 0, "", commadPtr);
             } catch (JSONException e) {
-                listener.onProductsResult(IapJNI.BILLING_RESPONSE_RESULT_ERROR, null, commadPtr);
+                listener.onProductsResult(IapJNI.BILLING_RESPONSE_RESULT_ERROR, null, 0, "", commadPtr);
             }
         }
     }
