@@ -2,6 +2,7 @@ package com.defold.iap;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
@@ -9,6 +10,8 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -49,7 +52,7 @@ import com.android.billingclient.api.AcknowledgePurchaseResponseListener;
 public class IapGooglePlay implements PurchasesUpdatedListener {
     public static final String TAG = "IapGooglePlay";
 
-    private Map<String, ProductDetails> products = new HashMap<String, ProductDetails>();
+    private Map<String, ProductDetails> products = new ConcurrentHashMap<String, ProductDetails>();
     private BillingClient billingClient;
     private IPurchaseListener purchaseListener;
     private boolean autoFinishTransactions;
@@ -511,9 +514,12 @@ public class IapGooglePlay implements PurchasesUpdatedListener {
      */
     private void queryProductDetailsAsync(final List<String> productList, final ProductDetailsResponseListener listener) {
         ProductDetailsResponseListener detailsListener = new ProductDetailsResponseListener() {
-            private List<ProductDetails> allProductDetails = new ArrayList<ProductDetails>();
-            private List<UnfetchedProduct> allUnfecthedProducts = new ArrayList<UnfetchedProduct>();
-            private int queries = 2;
+            // the two queries may complete on different threads, so both the accumulated
+            // lists and the counter must be thread safe, or the listener can end up being
+            // invoked twice (which leaves the native side with a freed command pointer)
+            private List<ProductDetails> allProductDetails = Collections.synchronizedList(new ArrayList<ProductDetails>());
+            private List<UnfetchedProduct> allUnfecthedProducts = Collections.synchronizedList(new ArrayList<UnfetchedProduct>());
+            private AtomicInteger queries = new AtomicInteger(2);
 
             @Override
             public void onProductDetailsResponse(BillingResult billingResult, QueryProductDetailsResult queryProductDetailsResult) {
@@ -536,9 +542,8 @@ public class IapGooglePlay implements PurchasesUpdatedListener {
                 }
 
                 // we're finished when we have queried for both in-app and subs
-                queries--;
-                if (queries == 0) {
-                    QueryProductDetailsResult allResults = QueryProductDetailsResult.create(allProductDetails, allUnfecthedProducts);
+                if (queries.decrementAndGet() == 0) {
+                    QueryProductDetailsResult allResults = QueryProductDetailsResult.create(new ArrayList<ProductDetails>(allProductDetails), new ArrayList<UnfetchedProduct>(allUnfecthedProducts));
                     listener.onProductDetailsResponse(billingResult, allResults);
                 }
             }

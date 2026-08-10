@@ -38,6 +38,66 @@ struct IAP
 
 static IAP g_IAP;
 
+// Commands handed over to Java as a raw pointer (iap.list). Java may deliver a
+// result for the same pointer more than once (two product type queries, service
+// reconnects, Amazon error paths), and the command is freed after the first
+// delivery. Only pointers still in this registry are accepted.
+static dmArray<IAPCommand*> g_ProductCommands;
+static dmMutex::HMutex      g_ProductCommandsMutex = 0;
+
+static void IAP_ProductCommandRegister(IAPCommand* cmd)
+{
+    if (g_ProductCommandsMutex == 0)
+    {
+        return;
+    }
+
+    DM_MUTEX_SCOPED_LOCK(g_ProductCommandsMutex);
+
+    if (g_ProductCommands.Full())
+    {
+        g_ProductCommands.OffsetCapacity(2);
+    }
+    g_ProductCommands.Push(cmd);
+}
+
+static bool IAP_ProductCommandUnregister(IAPCommand* cmd)
+{
+    if (g_ProductCommandsMutex == 0)
+    {
+        return false;
+    }
+
+    DM_MUTEX_SCOPED_LOCK(g_ProductCommandsMutex);
+
+    for (uint32_t i = 0; i != g_ProductCommands.Size(); ++i)
+    {
+        if (g_ProductCommands[i] == cmd)
+        {
+            g_ProductCommands.EraseSwap(i);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void IAP_ProductCommandsClear()
+{
+    if (g_ProductCommandsMutex == 0)
+    {
+        return;
+    }
+
+    DM_MUTEX_SCOPED_LOCK(g_ProductCommandsMutex);
+
+    for (uint32_t i = 0; i != g_ProductCommands.Size(); ++i)
+    {
+        delete g_ProductCommands[i];
+    }
+    g_ProductCommands.SetSize(0);
+}
+
 static int IAP_ProcessPendingTransactions(lua_State* L)
 {
     DM_LUA_STACK_CHECK(L, 0);
@@ -64,6 +124,7 @@ static int IAP_List(lua_State* L)
     IAPCommand* cmd = new IAPCommand;
     cmd->m_Callback = dmScript::CreateCallback(L, 2);
     cmd->m_Command = IAP_PRODUCT_RESULT;
+    IAP_ProductCommandRegister(cmd);
 
     jstring products = env->NewStringUTF(buf);
     env->CallVoidMethod(g_IAP.m_IAP, g_IAP.m_List, products, g_IAP.m_IAPJNI, (jlong)cmd);
@@ -202,12 +263,18 @@ static int IAP_SetListener(lua_State* L)
 
     IAP* iap = &g_IAP;
 
-    bool had_previous = iap->m_Listener != 0;
-
-    if (iap->m_Listener)
-        dmScript::DestroyCallback(iap->m_Listener);
+    dmScript::LuaCallbackInfo* previous = iap->m_Listener;
+    bool had_previous = previous != 0;
 
     iap->m_Listener = dmScript::CreateCallback(L, 1);
+
+    if (had_previous)
+    {
+        // queued purchase results still point at the previous listener, retarget them
+        // before it is destroyed, or the next flush reads freed memory
+        IAP_Queue_ReplaceCallback(&iap->m_CommandQueue, previous, iap->m_Listener);
+        dmScript::DestroyCallback(previous);
+    }
 
     // On first set listener, trigger process old ones.
     if (!had_previous) {
@@ -247,29 +314,35 @@ extern "C" {
 
 JNIEXPORT void JNICALL Java_com_defold_iap_IapJNI_onProductsResult(JNIEnv* env, jobject, jint responseCode, jstring productList, jint billingCode, jstring billingMsg, jlong cmdHandle)
 {
-    const char* pl = 0;
-    const char* c_billingMsg = env->GetStringUTFChars(billingMsg, 0);
-
-    if (productList)
-    {
-        pl = env->GetStringUTFChars(productList, 0);
-    }
-
     IAPCommand* cmd = (IAPCommand*)cmdHandle;
+
+    if (!IAP_ProductCommandUnregister(cmd))
+    {
+        dmLogWarning("Ignoring product list result for an already handled request");
+        return;
+    }
 
     cmd->m_ResponseCode = responseCode;
     cmd->m_BillingCode = billingCode;
-    cmd->m_BillingMsg = strdup(c_billingMsg);
 
-    if (pl)
+    if (billingMsg)
     {
+        const char* c_billingMsg = env->GetStringUTFChars(billingMsg, 0);
+        cmd->m_BillingMsg = strdup(c_billingMsg);
+        env->ReleaseStringUTFChars(billingMsg, c_billingMsg);
+    }
+
+    if (productList)
+    {
+        const char* pl = env->GetStringUTFChars(productList, 0);
         cmd->m_Data = strdup(pl);
         env->ReleaseStringUTFChars(productList, pl);
     }
 
-    env->ReleaseStringUTFChars(billingMsg, c_billingMsg);
-
+    // the queue takes a copy (and ownership of the strings), the command itself
+    // is no longer referenced by anyone
     IAP_Queue_Push(&g_IAP.m_CommandQueue, cmd);
+    delete cmd;
 }
 
 JNIEXPORT void JNICALL Java_com_defold_iap_IapJNI_onPurchaseResult__ILjava_lang_String_2(JNIEnv* env, jobject, jint responseCode, jstring purchaseData)
@@ -318,6 +391,12 @@ static void HandleProductResult(const IAPCommand* cmd)
         return;
     }
 
+    if (!dmScript::IsCallbackValid(cmd->m_Callback))
+    {
+        dmLogWarning("Received product list but the callback is no longer valid!");
+        return;
+    }
+
     lua_State* L = dmScript::GetCallbackLuaContext(cmd->m_Callback);
     int top = lua_gettop(L);
 
@@ -334,7 +413,8 @@ static void HandleProductResult(const IAPCommand* cmd)
     } else {
         dmLogError("IAP error %d", cmd->m_ResponseCode);
         lua_pushnil(L);
-        IAP_PushError(L, (const char*)cmd->m_BillingMsg, cmd->m_BillingCode);
+        const char* error = cmd->m_BillingMsg ? (const char*)cmd->m_BillingMsg : "failed to fetch product";
+        IAP_PushError(L, error, cmd->m_BillingCode);
     }
 
     dmScript::PCall(L, 3, 0);
@@ -350,6 +430,12 @@ static void HandlePurchaseResult(const IAPCommand* cmd)
     if (cmd->m_Callback == 0)
     {
         dmLogWarning("Received purchase result but no listener was set!");
+        return;
+    }
+
+    if (!dmScript::IsCallbackValid(cmd->m_Callback))
+    {
+        dmLogWarning("Received purchase result but the listener is no longer valid!");
         return;
     }
 
@@ -391,6 +477,11 @@ static void HandlePurchaseResult(const IAPCommand* cmd)
 static dmExtension::Result InitializeIAP(dmExtension::Params* params)
 {
     IAP_Queue_Create(&g_IAP.m_CommandQueue);
+
+    if (g_ProductCommandsMutex == 0)
+    {
+        g_ProductCommandsMutex = dmMutex::New();
+    }
 
     g_IAP.m_autoFinishTransactions = dmConfigFile::GetInt(params->m_ConfigFile, "iap.auto_finish_transactions", 1) == 1;
 
@@ -456,6 +547,10 @@ static void IAP_OnCommand(IAPCommand* cmd, void*)
     if (cmd->m_Data) {
         free(cmd->m_Data);
     }
+
+    if (cmd->m_BillingMsg) {
+        free(cmd->m_BillingMsg);
+    }
 }
 
 static dmExtension::Result UpdateIAP(dmExtension::Params* params)
@@ -468,7 +563,14 @@ static dmExtension::Result FinalizeIAP(dmExtension::Params* params)
 {
     IAP_Queue_Destroy(&g_IAP.m_CommandQueue);
 
-    if (params->m_L == dmScript::GetCallbackLuaContext(g_IAP.m_Listener)) {
+    IAP_ProductCommandsClear();
+    if (g_ProductCommandsMutex != 0)
+    {
+        dmMutex::Delete(g_ProductCommandsMutex);
+        g_ProductCommandsMutex = 0;
+    }
+
+    if (g_IAP.m_Listener != 0 && params->m_L == dmScript::GetCallbackLuaContext(g_IAP.m_Listener)) {
         dmScript::DestroyCallback(g_IAP.m_Listener);
         g_IAP.m_Listener = 0;
     }

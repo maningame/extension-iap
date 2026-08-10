@@ -119,6 +119,19 @@ void IAP_Queue_Push(IAPCommandQueue* queue, IAPCommand* cmd)
     queue->m_Commands.Push(*cmd);
 }
 
+void IAP_Queue_ReplaceCallback(IAPCommandQueue* queue, dmScript::LuaCallbackInfo* from, dmScript::LuaCallbackInfo* to)
+{
+    DM_MUTEX_SCOPED_LOCK(queue->m_Mutex);
+
+    for(uint32_t i = 0; i != queue->m_Commands.Size(); ++i)
+    {
+        if (queue->m_Commands[i].m_Callback == from)
+        {
+            queue->m_Commands[i].m_Callback = to;
+        }
+    }
+}
+
 void IAP_Queue_Flush(IAPCommandQueue* queue, IAPCommandFn fn, void* ctx)
 {
     assert(fn != 0);

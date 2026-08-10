@@ -46,6 +46,9 @@ void IAP_Queue_Destroy(IAPCommandQueue* queue);
 // The command is copied by value into the queue
 void IAP_Queue_Push(IAPCommandQueue* queue, IAPCommand* cmd);
 void IAP_Queue_Flush(IAPCommandQueue* queue, IAPCommandFn fn, void* ctx);
+// Retarget queued commands from one callback to another. Used when a callback is
+// about to be destroyed while commands referring to it are still queued up.
+void IAP_Queue_ReplaceCallback(IAPCommandQueue* queue, dmScript::LuaCallbackInfo* from, dmScript::LuaCallbackInfo* to);
 
 #endif
 
