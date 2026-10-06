@@ -17,14 +17,17 @@
 
       - name: options
         type: table
+        optional: true
         desc: optional parameters as properties. The following parameters can be set
         members:
         - name: request_id
           type: string
+          optional: true
           desc: Facebook only [icon:facebook]. Optional custom unique request id to
                 set for this transaction. The id becomes attached to the payment within the Graph API.
         - name: token
           type: string
+          optional: true
           desc: Google Play only [icon:googleplay]. Which subscription offer to use when buying a subscription. The token can be retrieved from
                 the subscriptions table returned when calling iap.list()
 
@@ -226,6 +229,13 @@
                   iap.list({"my_iap"}, iap_callback)
               end
             ```
+
+#*****************************************************************************************************
+
+  - name: process_pending_transactions
+    type: function
+    desc: Google Play only [icon:googleplay]. Queries purchases that are not finished yet, both in-app
+          products and subscriptions, and delivers them to the listener set with `iap.set_listener()`.
 
 #*****************************************************************************************************
 
