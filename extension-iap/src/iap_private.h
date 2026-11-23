@@ -9,6 +9,7 @@ enum EIAPCommand
 {
     IAP_PRODUCT_RESULT,
     IAP_PURCHASE_RESULT,
+    IAP_COUNTRY_RESULT,
 };
 
 struct DM_ALIGNED(16) IAPCommand

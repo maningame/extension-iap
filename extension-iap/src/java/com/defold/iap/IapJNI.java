@@ -1,6 +1,6 @@
 package com.defold.iap;
 
-public class IapJNI implements IListProductsListener, IPurchaseListener {
+public class IapJNI implements IListProductsListener, IPurchaseListener, ICountryListener {
 
     // NOTE: Also defined in iap.h
     public static final int TRANS_STATE_PURCHASING = 0;
@@ -45,7 +45,15 @@ public class IapJNI implements IListProductsListener, IPurchaseListener {
         }
     }
 
+    @Override
+    public synchronized void onCountryResult(int responseCode, String country, int billingCode, String billingMsg, long requestId) {
+        if (active) {
+            nativeOnCountryResult(responseCode, country, billingCode, billingMsg, requestId);
+        }
+    }
+
     private native void nativeOnProductsResult(int responseCode, String productList, int billingCode, String billingMsg, long requestId);
     private native void nativeOnPurchaseResult(int responseCode, String purchaseData);
+    private native void nativeOnCountryResult(int responseCode, String country, int billingCode, String billingMsg, long requestId);
 
 }

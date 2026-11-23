@@ -39,6 +39,7 @@ struct IAP
     jmethodID       m_ProcessPendingConsumables;
     jmethodID       m_AcknowledgeTransaction;
     jmethodID       m_FinishTransaction;
+    jmethodID       m_GetCountry;
 
     IAPCommandQueue m_CommandQueue;
     dmArray<IAPPendingRequest> m_PendingRequests;
@@ -82,6 +83,26 @@ static int IAP_List(lua_State* L)
     env->DeleteLocalRef(products);
 
     free(buf);
+    return 0;
+}
+
+static int IAP_GetCountry(lua_State* L)
+{
+    DM_LUA_STACK_CHECK(L, 0);
+
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+
+    dmAndroid::ThreadAttacher threadAttacher;
+    JNIEnv* env = threadAttacher.GetEnv();
+    IAPPendingRequest request;
+    request.m_Callback = dmScript::CreateCallback(L, 1);
+    request.m_Id = ++g_IAP.m_NextRequestId;
+    if (g_IAP.m_PendingRequests.Full())
+        g_IAP.m_PendingRequests.OffsetCapacity(4);
+    g_IAP.m_PendingRequests.Push(request);
+
+    env->CallVoidMethod(g_IAP.m_IAP, g_IAP.m_GetCountry, g_IAP.m_IAPJNI, (jlong)request.m_Id);
+
     return 0;
 }
 
@@ -248,6 +269,7 @@ static const luaL_reg IAP_methods[] =
     {"set_listener", IAP_SetListener},
     {"get_provider_id", IAP_GetProviderId},
     {"process_pending_transactions", IAP_ProcessPendingTransactions},
+    {"get_country", IAP_GetCountry},
     {0, 0}
 };
 
@@ -274,6 +296,28 @@ JNIEXPORT void JNICALL Java_com_defold_iap_IapJNI_nativeOnProductsResult(JNIEnv*
     {
         cmd.m_Data = strdup(pl);
         env->ReleaseStringUTFChars(productList, pl);
+    }
+    if (billingMsg)
+    {
+        const char* bm = env->GetStringUTFChars(billingMsg, 0);
+        cmd.m_BillingMsg = strdup(bm);
+        env->ReleaseStringUTFChars(billingMsg, bm);
+    }
+    IAP_Queue_Push(&g_IAP.m_CommandQueue, &cmd);
+}
+
+JNIEXPORT void JNICALL Java_com_defold_iap_IapJNI_nativeOnCountryResult(JNIEnv* env, jobject, jint responseCode, jstring country, jint billingCode, jstring billingMsg, jlong requestId)
+{
+    IAPCommand cmd;
+    cmd.m_Command = IAP_COUNTRY_RESULT;
+    cmd.m_RequestId = (uint64_t)requestId;
+    cmd.m_ResponseCode = responseCode;
+    cmd.m_BillingCode = billingCode;
+    if (country)
+    {
+        const char* c = env->GetStringUTFChars(country, 0);
+        cmd.m_Data = strdup(c);
+        env->ReleaseStringUTFChars(country, c);
     }
     if (billingMsg)
     {
@@ -321,18 +365,23 @@ static ErrorReason BillingResponseToErrorReason(BillingResponse response)
     }
 }
 
-static void HandleProductResult(const IAPCommand* cmd)
+static dmScript::LuaCallbackInfo* TakePendingRequest(uint64_t id)
 {
-    dmScript::LuaCallbackInfo* callback = 0;
     for (uint32_t i = 0; i < g_IAP.m_PendingRequests.Size(); ++i)
     {
-        if (g_IAP.m_PendingRequests[i].m_Id == cmd->m_RequestId)
+        if (g_IAP.m_PendingRequests[i].m_Id == id)
         {
-            callback = g_IAP.m_PendingRequests[i].m_Callback;
+            dmScript::LuaCallbackInfo* callback = g_IAP.m_PendingRequests[i].m_Callback;
             g_IAP.m_PendingRequests.EraseSwap(i);
-            break;
+            return callback;
         }
     }
+    return 0;
+}
+
+static void HandleProductResult(const IAPCommand* cmd)
+{
+    dmScript::LuaCallbackInfo* callback = TakePendingRequest(cmd->m_RequestId);
 
     if (callback == 0)
     {
@@ -365,6 +414,54 @@ static void HandleProductResult(const IAPCommand* cmd)
         dmLogError("IAP error %d", cmd->m_ResponseCode);
         lua_pushnil(L);
         const char* error = cmd->m_BillingMsg ? (const char*)cmd->m_BillingMsg : "failed to fetch product";
+        IAP_PushError(L, error, cmd->m_BillingCode);
+    }
+
+    dmScript::PCall(L, 3, 0);
+
+    dmScript::TeardownCallback(callback);
+    dmScript::DestroyCallback(callback);
+
+    assert(top == lua_gettop(L));
+}
+
+static void HandleCountryResult(const IAPCommand* cmd)
+{
+    dmScript::LuaCallbackInfo* callback = TakePendingRequest(cmd->m_RequestId);
+
+    if (callback == 0)
+    {
+        dmLogWarning("Received country for an unknown or completed request");
+        return;
+    }
+
+    if (!dmScript::IsCallbackValid(callback))
+    {
+        dmLogWarning("Received country but the callback is no longer valid!");
+        dmScript::DestroyCallback(callback);
+        return;
+    }
+
+    lua_State* L = dmScript::GetCallbackLuaContext(callback);
+    int top = lua_gettop(L);
+
+    if (!dmScript::SetupCallback(callback))
+    {
+        dmScript::DestroyCallback(callback);
+        assert(top == lua_gettop(L));
+        return;
+    }
+
+    const char* country = (const char*)cmd->m_Data;
+
+    if (cmd->m_ResponseCode == BILLING_RESPONSE_RESULT_OK && country != 0 && country[0] != '\0') {
+        lua_pushstring(L, country);
+        lua_pushnil(L);
+    } else {
+        dmLogError("IAP country error %d", cmd->m_ResponseCode);
+        lua_pushnil(L);
+        const char* msg = (const char*)cmd->m_BillingMsg;
+        const char* error = (msg != 0 && msg[0] != '\0') ? msg : "failed to get country";
         IAP_PushError(L, error, cmd->m_BillingCode);
     }
 
@@ -459,6 +556,7 @@ static dmExtension::Result InitializeIAP(dmExtension::Params* params)
     g_IAP.m_ProcessPendingConsumables = env->GetMethodID(iap_class, "processPendingConsumables", "(Lcom/defold/iap/IPurchaseListener;)V");
     g_IAP.m_FinishTransaction = env->GetMethodID(iap_class, "finishTransaction", "(Ljava/lang/String;Lcom/defold/iap/IPurchaseListener;)V");
     g_IAP.m_AcknowledgeTransaction = env->GetMethodID(iap_class, "acknowledgeTransaction", "(Ljava/lang/String;Lcom/defold/iap/IPurchaseListener;)V");
+    g_IAP.m_GetCountry = env->GetMethodID(iap_class, "getCountry", "(Lcom/defold/iap/ICountryListener;J)V");
 
     jmethodID jni_constructor = env->GetMethodID(iap_class, "<init>", "(Landroid/app/Activity;Z)V");
     g_IAP.m_IAP = env->NewGlobalRef(env->NewObject(iap_class, jni_constructor, threadAttacher.GetActivity()->clazz, g_IAP.m_autoFinishTransactions));
@@ -487,6 +585,9 @@ static void IAP_OnCommand(IAPCommand* cmd, void*)
         break;
     case IAP_PURCHASE_RESULT:
         HandlePurchaseResult(cmd);
+        break;
+    case IAP_COUNTRY_RESULT:
+        HandleCountryResult(cmd);
         break;
 
     default:

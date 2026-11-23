@@ -48,6 +48,9 @@ import com.android.billingclient.api.ConsumeResponseListener;
 import com.android.billingclient.api.PurchasesResponseListener;
 import com.android.billingclient.api.ProductDetailsResponseListener;
 import com.android.billingclient.api.AcknowledgePurchaseResponseListener;
+import com.android.billingclient.api.BillingConfig;
+import com.android.billingclient.api.BillingConfigResponseListener;
+import com.android.billingclient.api.GetBillingConfigParams;
 
 public class IapGooglePlay implements PurchasesUpdatedListener {
     public static final String TAG = "IapGooglePlay";
@@ -593,6 +596,29 @@ public class IapGooglePlay implements PurchasesUpdatedListener {
                     Log.e(TAG, "Unable to list products: " + billingResult.getDebugMessage());
                 }
                 productsListener.onProductsResult(billingResultToDefoldResponse(billingResult), a.toString(),
+                    billingResult.getResponseCode(), billingResult.getDebugMessage(), commandPtr);
+            }
+        });
+    }
+
+    /**
+     * Called from Lua. Country of the user's Google Play account, ISO 3166-1 alpha-2.
+     */
+    public void getCountry(final ICountryListener countryListener, final long commandPtr) {
+        Log.d(TAG, "getCountry()");
+
+        GetBillingConfigParams params = GetBillingConfigParams.newBuilder().build();
+        billingClient.getBillingConfigAsync(params, new BillingConfigResponseListener() {
+            @Override
+            public void onBillingConfigResponse(BillingResult billingResult, BillingConfig billingConfig) {
+                String country = "";
+                if (billingResult.getResponseCode() == BillingResponseCode.OK && billingConfig != null) {
+                    country = billingConfig.getCountryCode();
+                }
+                else {
+                    Log.e(TAG, "Unable to get billing config: " + billingResult.getDebugMessage());
+                }
+                countryListener.onCountryResult(billingResultToDefoldResponse(billingResult), country,
                     billingResult.getResponseCode(), billingResult.getDebugMessage(), commandPtr);
             }
         });

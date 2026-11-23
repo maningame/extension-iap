@@ -239,6 +239,42 @@
 
 #*****************************************************************************************************
 
+  - name: get_country
+    type: function
+    desc: Google Play only [icon:googleplay]. Get the country of the user's Google Play account
+          (BillingClient.getBillingConfigAsync). On Amazon the callback always receives an error.
+    parameters:
+    - name: callback
+      type: function
+      desc: result callback taking the following parameters
+      parameters:
+      - name: self
+        type: object
+        desc: The current object.
+
+      - name: country
+        type: string
+        desc: ISO 3166-1 alpha-2 country code, for example `US`. `nil` if there is an error.
+
+      - name: error
+        type: table
+        desc: a table containing error information. `nil` if there is no error. - `error` (the error message)
+              - `reason` (the billing response code)
+
+    examples:
+      - desc: |-
+            ```lua
+              iap.get_country(function(self, country, error)
+                if error == nil then
+                  print(country)
+                else
+                  print(error.error)
+                end
+              end)
+            ```
+
+#*****************************************************************************************************
+
   - name: restore
     type: function
     desc: Restore previously purchased products.

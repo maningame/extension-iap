@@ -103,6 +103,10 @@ public class IapAmazon implements PurchasingListener {
         // Stub to prevent errors.
     }
 
+    public void getCountry(final ICountryListener listener, final long commandPtr) {
+        listener.onCountryResult(IapJNI.BILLING_RESPONSE_RESULT_ERROR, "", 0, "not supported on Amazon", commandPtr);
+    }
+
     private void doGetPurchaseUpdates(final IPurchaseListener listener, final boolean reset) {
         synchronized (purchaseListeners) {
             RequestId req = PurchasingService.getPurchaseUpdates(reset);
